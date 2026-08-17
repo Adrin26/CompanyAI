@@ -1,0 +1,1 @@
+"""CompanyAI FastAPI chatbot backend."""

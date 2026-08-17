@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[oc]
+*.egg-info/
+.venv/
+backend/.venv/
+
+# Node
+node_modules/
+frontend/dist/
+dist/
+dist-ssr/
+
+# Env / secrets
+.env
+!.env.example
+
+# Tooling
+.uv/
+*.log
+.DS_Store
+.idea/
+.vscode/
