@@ -155,7 +155,7 @@ export default function Chat() {
             className={`bubble ${message.role}`}
           >
             <span className="bubble-role">
-              {message.role === "user" ? "You" : "Gemini"}
+              {message.role === "user" ? "You" : "Atom"}
             </span>
             <p>{message.content || (streaming ? "Thinking..." : "")}</p>
           </article>
