@@ -2,6 +2,7 @@ from typing import Annotated, AsyncIterator, TypedDict
 
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -31,12 +32,22 @@ def _text_from_content(content: object) -> str:
     return ""
 
 
-def _build_graph():
-    llm = ChatGoogleGenerativeAI(
-        model=settings.gemini_model,
-        api_key=settings.gemini_api_key,
+def _build_llm():
+    if settings.use_gemini:
+        return ChatGoogleGenerativeAI(
+            model=settings.gemini_model,
+            api_key=settings.gemini_api_key,
+            temperature=0.7,
+        )
+    return ChatOllama(
+        model=settings.ollama_model,
+        base_url=settings.ollama_base_url,
         temperature=0.7,
     )
+
+
+def _build_graph():
+    llm = _build_llm()
 
     def chatbot(state: ChatState) -> dict:
         return {"messages": [llm.invoke(state["messages"])]}
@@ -54,10 +65,6 @@ _graph = None
 def get_graph():
     global _graph
     if _graph is None:
-        if not settings.gemini_api_key:
-            raise RuntimeError(
-                "GEMINI_API_KEY is not set. Copy backend/.env.example to backend/.env."
-            )
         _graph = _build_graph()
     return _graph
 

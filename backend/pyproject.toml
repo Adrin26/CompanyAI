@@ -1,7 +1,7 @@
 [project]
 name = "companyai-backend"
 version = "0.1.0"
-description = "Gemini chatbot backend with LangGraph and FastAPI"
+description = "Chatbot backend with LangGraph, Gemini, and Ollama fallback"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.141.1",
@@ -12,6 +12,7 @@ dependencies = [
     "pydantic-settings>=2.15.0",
     "python-dotenv>=1.2.3",
     "uvicorn[standard]>=0.52.3",
+    "langchain-ollama>=0.3.0",
 ]
 
 [tool.uv]
