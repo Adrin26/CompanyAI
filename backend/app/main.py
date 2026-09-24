@@ -1,18 +1,25 @@
 import json
+import os
+import tempfile
 
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
-import tempfile
-import os
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import settings
-from app.graph import stream_reply, get_retriever
-from app.schemas import ChatRequest
-from app.auth import get_current_user, get_user_from_db, verify_password, create_access_token
+from app.graph import stream_reply, get_retriever, consolidate_session
+from app.schemas import ChatRequest, RegisterRequest, ConsolidateRequest
+from app.auth import (
+    get_current_user,
+    get_admin_user,
+    get_user_from_db,
+    register_user,
+    verify_password,
+    create_access_token,
+)
 
 app = FastAPI(title="CompanyAI Chatbot")
 
@@ -30,26 +37,50 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "provider": settings.llm_provider}
 
 
+@app.post("/register")
+async def register(req: RegisterRequest):
+    user = register_user(req.username.strip(), req.password, role="user")
+    access_token = create_access_token(data={"sub": user["username"]})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "username": user["username"],
+        "role": user["role"],
+    }
+
+
 @app.post("/login")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = get_user_from_db(form_data.username)
+    user = get_user_from_db(form_data.username.strip())
     
-    if not user or not verify_password(form_data.password, user[1]):
+    if not user or not verify_password(form_data.password, user["hashed_password"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = create_access_token(data={"sub": user[0]})
-    return {"access_token": access_token, "token_type": "bearer"}
+    access_token = create_access_token(data={"sub": user["username"]})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "username": user["username"],
+        "role": user["role"],
+    }
 
+
+@app.get("/me")
+async def me(current_user: dict = Depends(get_current_user)):
+    return {
+        "username": current_user["username"],
+        "role": current_user["role"],
+    }
 
 
 @app.post("/upload")
 async def upload_document(
     file: UploadFile = File(...), 
-    current_user: str = Depends(get_current_user)
+    current_admin: dict = Depends(get_admin_user),
 ):
     is_pdf = file.filename.endswith(".pdf")
     is_docx = file.filename.endswith(".docx")
@@ -77,16 +108,18 @@ async def upload_document(
         vectorstore = retriever.vectorstore
         vectorstore.add_documents(chunks)
         
-        return {"message": f"Successfully added {len(chunks)} chunks from {file.filename} to vector DB."}
+        return {"message": f"Successfully indexed {len(chunks)} chunks from {file.filename} into knowledge base."}
     finally:
         os.unlink(temp_path)
 
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
+    user_id = request.user_id or "guest"
+
     async def event_generator():
         try:
-            async for chunk in stream_reply(request.thread_id, request.message):
+            async for chunk in stream_reply(request.thread_id, request.message, user_id=user_id):
                 yield f"data: {json.dumps({'content': chunk})}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
         except RuntimeError as exc:
@@ -103,3 +136,16 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# 2, 3, 4. Session Consolidation Trigger (New Chat / Idle Timeout)
+@app.post("/chat/consolidate")
+async def consolidate(req: ConsolidateRequest):
+    user_id = req.user_id or "guest"
+    summary = await consolidate_session(thread_id=req.thread_id, user_id=user_id)
+    return {
+        "status": "ok",
+        "saved_to_sqlite": bool(summary),
+        "summary": summary,
+    }
+

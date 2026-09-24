@@ -1,15 +1,14 @@
-from typing import Annotated, AsyncIterator, TypedDict
-import aiosqlite
-
-from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
+from typing import Annotated, AsyncIterator, TypedDict, Optional
+from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage, BaseMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_chroma import Chroma
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
 from app.config import settings
+from app.auth import get_user_memories, save_user_memory
 from redis import Redis
 from langchain_community.cache import RedisCache
 from langchain_core.globals import set_llm_cache
@@ -23,7 +22,8 @@ except Exception:
 
 
 class ChatState(TypedDict):
-    messages: Annotated[list, add_messages]
+    messages: Annotated[list[BaseMessage], add_messages]
+    user_id: Optional[str]
 
 
 def _text_from_content(content: object) -> str:
@@ -74,26 +74,44 @@ def get_retriever():
     return vector_db.as_retriever(search_kwargs={"k": 3})
 
 
-def _build_graph(checkpointer):
+# 1. Active Chat (Fast & Light): MemorySaver keeps active conversations instantly in RAM
+memory_saver = MemorySaver()
+
+
+def _build_graph():
     llm = _build_llm()
     retriever = get_retriever()
 
     async def chatbot(state: ChatState) -> dict:
-        last_message = state["messages"][-1].content
-        if isinstance(last_message, str):
+        user_id = state.get("user_id") or "guest"
+        messages = state["messages"]
+        last_message = messages[-1].content if messages else ""
+        
+        # RAG context retrieval
+        context = ""
+        if isinstance(last_message, str) and last_message.strip():
             try:
                 docs = await retriever.ainvoke(last_message)
                 context = "\n\n".join([doc.page_content for doc in docs])
             except Exception:
                 context = ""
-        else:
-            context = ""
-            
-        system_msg = SystemMessage(
-            content=f"You are a helpful assistant. Use the following context to answer if relevant:\n\n{context}"
+
+        # Long-term consolidated memory retrieval from SQLite (for logged-in users)
+        memory_context = ""
+        if user_id and user_id not in ("guest", "anonymous"):
+            past_memories = get_user_memories(user_id, limit=4)
+            if past_memories:
+                memory_bullets = "\n".join([f"- {m}" for m in past_memories])
+                memory_context = f"\nWhat you remember about this user from previous sessions:\n{memory_bullets}\n"
+
+        system_prompt = (
+            f"You are a helpful and intelligent assistant named Atom.\n"
+            f"{memory_context}"
+            f"{f'Relevant document context:\n{context}\n' if context else ''}"
+            f"Answer concisely, accurately, and politely."
         )
-        
-        messages_to_llm = [system_msg] + state["messages"]
+
+        messages_to_llm = [SystemMessage(content=system_prompt)] + list(messages)
         response = await llm.ainvoke(messages_to_llm)
         return {"messages": [response]}
 
@@ -101,28 +119,24 @@ def _build_graph(checkpointer):
     builder.add_node("chatbot", chatbot)
     builder.add_edge(START, "chatbot")
     builder.add_edge("chatbot", END)
-    return builder.compile(checkpointer=checkpointer)
+    return builder.compile(checkpointer=memory_saver)
 
 
 _graph = None
-_conn = None
 
 
-async def get_graph():
-    global _graph, _conn
+def get_graph():
+    global _graph
     if _graph is None:
-        _conn = await aiosqlite.connect("antigravity_data.db")
-        checkpointer = AsyncSqliteSaver(_conn)
-        await checkpointer.setup()
-        _graph = _build_graph(checkpointer)
+        _graph = _build_graph()
     return _graph
 
 
-async def stream_reply(thread_id: str, message: str) -> AsyncIterator[str]:
-    graph = await get_graph()
+async def stream_reply(thread_id: str, message: str, user_id: str = "guest") -> AsyncIterator[str]:
+    graph = get_graph()
     config = {"configurable": {"thread_id": thread_id}}
     async for token, metadata in graph.astream(
-        {"messages": [HumanMessage(content=message)]},
+        {"messages": [HumanMessage(content=message)], "user_id": user_id},
         config=config,
         stream_mode="messages",
     ):
@@ -133,4 +147,52 @@ async def stream_reply(thread_id: str, message: str) -> AsyncIterator[str]:
         text = _text_from_content(token.content)
         if text:
             yield text
+
+
+# 3 & 4. Consolidation & Permanent Save to SQLite, then wiping RAM
+async def consolidate_session(thread_id: str, user_id: str = "guest") -> Optional[str]:
+    config = {"configurable": {"thread_id": thread_id}}
+    tuple_state = memory_saver.get_tuple(config)
+    
+    summary = None
+    if tuple_state and "channel_values" in tuple_state.checkpoint:
+        messages = tuple_state.checkpoint["channel_values"].get("messages", [])
+        
+        # Only summarize and persist if this is an authenticated user with active messages
+        if user_id and user_id not in ("guest", "anonymous") and len(messages) >= 2:
+            formatted_history = []
+            for msg in messages:
+                role = "User" if isinstance(msg, HumanMessage) or getattr(msg, "type", "") == "human" else "Atom"
+                content = _text_from_content(msg.content) if hasattr(msg, "content") else str(msg)
+                if content:
+                    formatted_history.append(f"{role}: {content}")
+            
+            if formatted_history:
+                chat_text = "\n".join(formatted_history)
+                llm = _build_llm()
+                prompt = (
+                    "Summarize the key facts, user preferences, user traits, and decisions from this chat session "
+                    "concisely in 1-3 bullet points so you can remember them in future sessions. "
+                    "If no noteworthy facts or preferences were shared, reply with 'NONE'.\n\n"
+                    f"Chat History:\n{chat_text}\n\nSummary:"
+                )
+                try:
+                    response = await llm.ainvoke([HumanMessage(content=prompt)])
+                    summary_text = _text_from_content(response.content).strip()
+                    if summary_text and "NONE" not in summary_text.upper():
+                        save_user_memory(user_id, summary_text)
+                        summary = summary_text
+                except Exception as e:
+                    print(f"Error consolidating session memory: {e}")
+
+    # Wipe the raw chat log completely from MemorySaver in RAM
+    keys_to_delete = [k for k in memory_saver.storage.keys() if thread_id in str(k)]
+    for k in keys_to_delete:
+        try:
+            del memory_saver.storage[k]
+        except KeyError:
+            pass
+
+    return summary
+
 
