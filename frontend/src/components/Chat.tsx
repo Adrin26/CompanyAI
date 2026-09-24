@@ -83,6 +83,53 @@ export default function Chat() {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Admin states
+  const [token, setToken] = useState<string | null>(null);
+  const [showLogin, setShowLogin] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadMsg, setUploadMsg] = useState("");
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const formData = new URLSearchParams();
+    formData.append('username', username);
+    formData.append('password', password);
+    try {
+      const res = await fetch(`${API_URL}/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: formData
+      });
+      if (!res.ok) throw new Error("Login failed");
+      const data = await res.json();
+      setToken(data.access_token);
+      setShowLogin(false);
+    } catch (err) {
+      alert("Login Failed");
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!uploadFile || !token) return;
+    const formData = new FormData();
+    formData.append("file", uploadFile);
+    setUploadMsg("Uploading...");
+    try {
+      const res = await fetch(`${API_URL}/upload`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
+        body: formData
+      });
+      if (!res.ok) throw new Error("Upload failed");
+      const data = await res.json();
+      setUploadMsg(data.message);
+    } catch (err) {
+      setUploadMsg("Upload failed");
+    }
+  };
+
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages, streaming]);
@@ -137,13 +184,36 @@ export default function Chat() {
 
   return (
     <div className="chat-shell">
-      <header className="chat-header">
+      <header className="chat-header" style={{ display: 'flex', justifyContent: 'space-between' }}>
         <div>
           <p className="chat-kicker">Company AI Chatbot</p>
           <h1>Atom</h1>
+          <p className="chat-subtitle">Atom is an AI chatbot that can help you with your questions.</p>
         </div>
-        <p className="chat-subtitle">Atom is an AI chatbot that can help you with your questions.</p>
+        <div>
+          {!token ? (
+            <button onClick={() => setShowLogin(!showLogin)} style={{ padding: '8px 16px', borderRadius: '8px', cursor: 'pointer' }}>
+              Admin Login
+            </button>
+          ) : (
+            <div style={{ padding: '8px', border: '1px solid #ccc', borderRadius: '8px' }}>
+              <input type="file" accept=".pdf,.docx" onChange={(e) => setUploadFile(e.target.files?.[0] || null)} />
+              <button onClick={handleUpload} style={{ padding: '4px 8px', marginLeft: '8px' }}>Upload Docs</button>
+              {uploadMsg && <div style={{ fontSize: '12px', marginTop: '4px' }}>{uploadMsg}</div>}
+            </div>
+          )}
+        </div>
       </header>
+
+      {showLogin && (
+        <div style={{ padding: '16px', background: '#f5f5f5', borderBottom: '1px solid #ccc' }}>
+          <form onSubmit={handleLogin} style={{ display: 'flex', gap: '8px' }}>
+            <input type="text" placeholder="Admin Username" value={username} onChange={e => setUsername(e.target.value)} required />
+            <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required />
+            <button type="submit">Login</button>
+          </form>
+        </div>
+      )}
 
       <div className="chat-log" ref={listRef}>
         {messages.length === 0 && (

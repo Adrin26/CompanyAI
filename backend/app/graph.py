@@ -1,13 +1,23 @@
 from typing import Annotated, AsyncIterator, TypedDict
 
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_ollama import ChatOllama
+from langchain_ollama import ChatOllama, OllamaEmbeddings
+from langchain_chroma import Chroma
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
 from app.config import settings
+from redis import Redis
+from langchain_community.cache import RedisCache
+from langchain_core.globals import set_llm_cache
+
+try:
+    redis_client = Redis(host='localhost', port=6379, db=0)
+    set_llm_cache(RedisCache(redis_client))
+except Exception as e:
+    print(f"Failed to initialize Redis cache: {e}")
 
 
 class ChatState(TypedDict):
@@ -46,17 +56,50 @@ def _build_llm():
     )
 
 
+def get_retriever():
+    embedding_model = OllamaEmbeddings(model="mxbai-embed-large:latest")
+    CHROMA_DIR = "./chroma_db"
+    COLLECTION = "antigravity_knowledge"
+    
+    vector_db = Chroma(
+        persist_directory=CHROMA_DIR,
+        collection_name=COLLECTION,
+        embedding_function=embedding_model
+    )
+    return vector_db.as_retriever(search_kwargs={"k": 3})
+
+
 def _build_graph():
     llm = _build_llm()
+    retriever = get_retriever()
 
     def chatbot(state: ChatState) -> dict:
-        return {"messages": [llm.invoke(state["messages"])]}
+        last_message = state["messages"][-1].content
+        if isinstance(last_message, str):
+            docs = retriever.invoke(last_message)
+            context = "\n\n".join([doc.page_content for doc in docs])
+        else:
+            context = ""
+            
+        system_msg = SystemMessage(
+            content=f"You are a helpful assistant. Use the following context to answer if relevant:\n\n{context}"
+        )
+        
+        messages_to_llm = [system_msg] + state["messages"]
+        return {"messages": [llm.invoke(messages_to_llm)]}
+
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    import sqlite3
+
+    conn = sqlite3.connect("antigravity_data.db", check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
+    checkpointer.setup()
 
     builder = StateGraph(ChatState)
     builder.add_node("chatbot", chatbot)
     builder.add_edge(START, "chatbot")
     builder.add_edge("chatbot", END)
-    return builder.compile(checkpointer=MemorySaver())
+    return builder.compile(checkpointer=checkpointer)
 
 
 _graph = None
