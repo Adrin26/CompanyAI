@@ -21,3 +21,14 @@ dist-ssr/
 .DS_Store
 .idea/
 .vscode/
+
+# Databases & Vector DBs
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+chroma_db/
+backend/chroma_db/
+backend/antigravity_data.db*
+

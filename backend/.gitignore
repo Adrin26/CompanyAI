@@ -11,3 +11,13 @@ wheels/
 
 # Secrets
 .env
+
+# Databases & Vector DBs
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+chroma_db/
+antigravity_data.db*
+

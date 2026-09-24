@@ -1,20 +1,35 @@
 import sqlite3
 import jwt
+import bcrypt
 from datetime import datetime, timedelta
 from typing import Optional
-from passlib.context import CryptContext
 from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from redis import Redis
 
 DB_PATH = "antigravity_data.db"
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login", auto_error=False)
 
 # Security config
 SECRET_KEY = "super-secret-key-for-now"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+
+
+def hash_password(password: str) -> str:
+    pwd_bytes = password.encode("utf-8")
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(pwd_bytes, salt).decode("utf-8")
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    try:
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8"),
+            hashed_password.encode("utf-8")
+        )
+    except Exception:
+        return False
 
 
 def init_auth_db():
@@ -49,7 +64,7 @@ def init_auth_db():
         if not cursor.fetchone():
             cursor.execute(
                 "INSERT INTO users (username, hashed_password, role) VALUES (?, ?, ?)", 
-                ("admin", pwd_context.hash("password123"), "admin")
+                ("admin", hash_password("password123"), "admin")
             )
         conn.commit()
 
@@ -76,7 +91,7 @@ def register_user(username: str, password: str, role: str = "user") -> dict:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Username already registered"
             )
-        hashed_pwd = pwd_context.hash(password)
+        hashed_pwd = hash_password(password)
         cursor.execute(
             "INSERT INTO users (username, hashed_password, role) VALUES (?, ?, ?)",
             (username, hashed_pwd, role)
@@ -118,9 +133,6 @@ def get_redis_client():
     except Exception:
         return None
 
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
 
 
 def create_access_token(data: dict) -> str:
