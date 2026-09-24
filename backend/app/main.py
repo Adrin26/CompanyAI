@@ -12,7 +12,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.config import settings
 from app.graph import stream_reply, get_retriever
 from app.schemas import ChatRequest
-from app.auth import get_current_user, cursor, verify_password, create_access_token
+from app.auth import get_current_user, get_user_from_db, verify_password, create_access_token
 
 app = FastAPI(title="CompanyAI Chatbot")
 
@@ -32,8 +32,7 @@ async def health() -> dict[str, str]:
 
 @app.post("/login")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    cursor.execute("SELECT username, hashed_password FROM users WHERE username = ?", (form_data.username,))
-    user = cursor.fetchone()
+    user = get_user_from_db(form_data.username)
     
     if not user or not verify_password(form_data.password, user[1]):
         raise HTTPException(
@@ -44,6 +43,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     
     access_token = create_access_token(data={"sub": user[0]})
     return {"access_token": access_token, "token_type": "bearer"}
+
 
 
 @app.post("/upload")

@@ -1,10 +1,11 @@
 from typing import Annotated, AsyncIterator, TypedDict
+import aiosqlite
 
 from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_chroma import Chroma
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
@@ -14,10 +15,11 @@ from langchain_community.cache import RedisCache
 from langchain_core.globals import set_llm_cache
 
 try:
-    redis_client = Redis(host='localhost', port=6379, db=0)
+    redis_client = Redis(host='localhost', port=6379, db=0, socket_connect_timeout=1)
+    redis_client.ping()
     set_llm_cache(RedisCache(redis_client))
-except Exception as e:
-    print(f"Failed to initialize Redis cache: {e}")
+except Exception:
+    pass
 
 
 class ChatState(TypedDict):
@@ -57,7 +59,10 @@ def _build_llm():
 
 
 def get_retriever():
-    embedding_model = OllamaEmbeddings(model="mxbai-embed-large:latest")
+    embedding_model = OllamaEmbeddings(
+        model="mxbai-embed-large:latest",
+        base_url=settings.ollama_base_url,
+    )
     CHROMA_DIR = "./chroma_db"
     COLLECTION = "antigravity_knowledge"
     
@@ -69,15 +74,18 @@ def get_retriever():
     return vector_db.as_retriever(search_kwargs={"k": 3})
 
 
-def _build_graph():
+def _build_graph(checkpointer):
     llm = _build_llm()
     retriever = get_retriever()
 
-    def chatbot(state: ChatState) -> dict:
+    async def chatbot(state: ChatState) -> dict:
         last_message = state["messages"][-1].content
         if isinstance(last_message, str):
-            docs = retriever.invoke(last_message)
-            context = "\n\n".join([doc.page_content for doc in docs])
+            try:
+                docs = await retriever.ainvoke(last_message)
+                context = "\n\n".join([doc.page_content for doc in docs])
+            except Exception:
+                context = ""
         else:
             context = ""
             
@@ -86,14 +94,8 @@ def _build_graph():
         )
         
         messages_to_llm = [system_msg] + state["messages"]
-        return {"messages": [llm.invoke(messages_to_llm)]}
-
-    from langgraph.checkpoint.sqlite import SqliteSaver
-    import sqlite3
-
-    conn = sqlite3.connect("antigravity_data.db", check_same_thread=False)
-    checkpointer = SqliteSaver(conn)
-    checkpointer.setup()
+        response = await llm.ainvoke(messages_to_llm)
+        return {"messages": [response]}
 
     builder = StateGraph(ChatState)
     builder.add_node("chatbot", chatbot)
@@ -103,17 +105,21 @@ def _build_graph():
 
 
 _graph = None
+_conn = None
 
 
-def get_graph():
-    global _graph
+async def get_graph():
+    global _graph, _conn
     if _graph is None:
-        _graph = _build_graph()
+        _conn = await aiosqlite.connect("antigravity_data.db")
+        checkpointer = AsyncSqliteSaver(_conn)
+        await checkpointer.setup()
+        _graph = _build_graph(checkpointer)
     return _graph
 
 
 async def stream_reply(thread_id: str, message: str) -> AsyncIterator[str]:
-    graph = get_graph()
+    graph = await get_graph()
     config = {"configurable": {"thread_id": thread_id}}
     async for token, metadata in graph.astream(
         {"messages": [HumanMessage(content=message)]},
@@ -127,3 +133,4 @@ async def stream_reply(thread_id: str, message: str) -> AsyncIterator[str]:
         text = _text_from_content(token.content)
         if text:
             yield text
+

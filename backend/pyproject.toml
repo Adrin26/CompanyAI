@@ -13,6 +13,7 @@ dependencies = [
     "python-dotenv>=1.2.3",
     "uvicorn[standard]>=0.52.3",
     "langchain-ollama>=0.3.0",
+    "aiosqlite>=0.22.1",
 ]
 
 [tool.uv]

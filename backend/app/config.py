@@ -13,11 +13,12 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:latest"
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
 
     @property
     def use_gemini(self) -> bool:
