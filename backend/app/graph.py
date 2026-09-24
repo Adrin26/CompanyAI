@@ -108,7 +108,8 @@ def _build_graph():
             f"You are a helpful and intelligent assistant named Atom.\n"
             f"{memory_context}"
             f"{f'Relevant document context:\n{context}\n' if context else ''}"
-            f"Answer concisely, accurately, and politely."
+            f"""Answer concisely, accurately, and politely. Only Answer based on the documents given.
+            DON'T HALLUCINATE. If you don't have the information just say its not in your knowledge base."""
         )
 
         messages_to_llm = [SystemMessage(content=system_prompt)] + list(messages)
