@@ -62,5 +62,6 @@ Open http://localhost:5173
 1. The browser sends `{ thread_id, message }` to `POST /chat/stream`.
 2. FastAPI runs a one-node LangGraph chatbot compiled with an in-memory checkpointer.
 3. Gemini is used when `GEMINI_API_KEY` is set; otherwise tokens come from local Ollama (`llama3.1:latest` by default).
-4. The same `thread_id` keeps multi-turn history until the backend process restarts.
-5. LangSmith traces LangGraph runs automatically from the env vars above.
+4. The same `thread_id` keeps multi-turn history with long-term memory consolidation in SQLite.
+5. **Knowledge Base Library**: Admins can view indexed files, chunk counts, upload new documents (`.pdf`, `.docx`), and delete existing documents along with their corresponding vector embeddings from Chroma DB.
+6. LangSmith traces LangGraph runs automatically from the env vars above.

@@ -58,7 +58,7 @@ def _build_llm():
     )
 
 
-def get_retriever():
+def get_vectorstore():
     embedding_model = OllamaEmbeddings(
         model="mxbai-embed-large:latest",
         base_url=settings.ollama_base_url,
@@ -66,12 +66,29 @@ def get_retriever():
     CHROMA_DIR = "./chroma_db"
     COLLECTION = "antigravity_knowledge"
     
-    vector_db = Chroma(
+    return Chroma(
         persist_directory=CHROMA_DIR,
         collection_name=COLLECTION,
         embedding_function=embedding_model
     )
+
+
+def get_retriever():
+    vector_db = get_vectorstore()
     return vector_db.as_retriever(search_kwargs={"k": 3})
+
+
+def delete_document_vectors(doc_id: int, filename: str):
+    vector_db = get_vectorstore()
+    # Delete chunks matching doc_id or source filename from Chroma
+    try:
+        vector_db._collection.delete(where={"doc_id": str(doc_id)})
+    except Exception as e:
+        print(f"Notice during vector deletion by doc_id: {e}")
+    try:
+        vector_db._collection.delete(where={"source": filename})
+    except Exception as e:
+        print(f"Notice during vector deletion by source: {e}")
 
 
 # 1. Active Chat (Fast & Light): MemorySaver keeps active conversations instantly in RAM

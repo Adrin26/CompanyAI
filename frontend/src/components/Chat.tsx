@@ -84,7 +84,11 @@ async function streamAssistantReply(
   }
 }
 
-export default function Chat() {
+type ChatProps = {
+  onOpenLibrary?: () => void;
+};
+
+export default function Chat({ onOpenLibrary }: ChatProps = {}) {
   const [threadId, setThreadId] = useState<string>(getOrCreateThreadId);
   const listRef = useRef<HTMLDivElement>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -329,6 +333,11 @@ export default function Chat() {
           <p className="chat-subtitle">In-RAM working memory + SQLite permanent consolidation</p>
         </div>
         <div className="header-actions">
+          {onOpenLibrary && (
+            <button className="btn-library-nav" onClick={onOpenLibrary} title="Open Document Knowledge Library">
+              📚 Knowledge Library
+            </button>
+          )}
           <button className="btn-new-chat" onClick={handleNewChat} title="Consolidate & Start New Chat">
             ✨ New Chat
           </button>

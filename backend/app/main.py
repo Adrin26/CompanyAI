@@ -10,7 +10,7 @@ from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import settings
-from app.graph import stream_reply, get_retriever, consolidate_session
+from app.graph import stream_reply, get_retriever, get_vectorstore, delete_document_vectors, consolidate_session
 from app.schemas import ChatRequest, RegisterRequest, ConsolidateRequest
 from app.auth import (
     get_current_user,
@@ -19,6 +19,9 @@ from app.auth import (
     register_user,
     verify_password,
     create_access_token,
+    add_document,
+    get_all_documents,
+    delete_document_from_db,
 )
 
 app = FastAPI(title="CompanyAI Chatbot")
@@ -77,6 +80,17 @@ async def me(current_user: dict = Depends(get_current_user)):
     }
 
 
+@app.get("/documents")
+async def list_documents(current_admin: dict = Depends(get_admin_user)):
+    docs = get_all_documents()
+    total_chunks = sum(doc.get("chunk_count", 0) for doc in docs)
+    return {
+        "documents": docs,
+        "total": len(docs),
+        "total_chunks": total_chunks,
+    }
+
+
 @app.post("/upload")
 async def upload_document(
     file: UploadFile = File(...), 
@@ -88,11 +102,14 @@ async def upload_document(
     if not (is_pdf or is_docx):
         raise HTTPException(status_code=400, detail="Only PDF or DOCX files are supported")
         
+    file_type = "PDF" if is_pdf else "DOCX"
     suffix = ".pdf" if is_pdf else ".docx"
+    
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
         content = await file.read()
         temp_file.write(content)
         temp_path = temp_file.name
+        file_size = len(content)
         
     try:
         if is_pdf:
@@ -104,13 +121,47 @@ async def upload_document(
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
         chunks = text_splitter.split_documents(docs)
         
-        retriever = get_retriever()
-        vectorstore = retriever.vectorstore
+        # Save record in SQLite database
+        doc_record = add_document(
+            filename=file.filename,
+            file_type=file_type,
+            file_size=file_size,
+            chunk_count=len(chunks),
+            uploaded_by=current_admin["username"],
+        )
+        
+        # Set precise metadata for Chroma indexing & targeted deletion
+        for chunk in chunks:
+            chunk.metadata["source"] = file.filename
+            chunk.metadata["doc_id"] = str(doc_record["id"])
+            chunk.metadata["filename"] = file.filename
+            chunk.metadata["uploaded_by"] = current_admin["username"]
+        
+        vectorstore = get_vectorstore()
         vectorstore.add_documents(chunks)
         
-        return {"message": f"Successfully indexed {len(chunks)} chunks from {file.filename} into knowledge base."}
+        return {
+            "message": f"Successfully indexed {len(chunks)} chunks from {file.filename} into knowledge base.",
+            "document": doc_record,
+        }
     finally:
         os.unlink(temp_path)
+
+
+@app.delete("/documents/{doc_id}")
+async def delete_document(doc_id: int, current_admin: dict = Depends(get_admin_user)):
+    deleted_doc = delete_document_from_db(doc_id)
+    if not deleted_doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    # Purge vectors from Chroma DB
+    delete_document_vectors(doc_id=doc_id, filename=deleted_doc["filename"])
+    
+    return {
+        "status": "ok",
+        "message": f"Successfully removed '{deleted_doc['filename']}' and purged its vector embeddings.",
+        "deleted_document": deleted_doc,
+    }
 
 
 @app.post("/chat/stream")

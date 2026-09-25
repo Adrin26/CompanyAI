@@ -59,6 +59,19 @@ def init_auth_db():
             )
         ''')
 
+        # Ensure documents table exists for RAG knowledge base tracking
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                file_size INTEGER NOT NULL DEFAULT 0,
+                chunk_count INTEGER NOT NULL DEFAULT 0,
+                uploaded_by TEXT NOT NULL DEFAULT 'admin',
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         # Create default admin user if not exists
         cursor.execute("SELECT id FROM users WHERE username='admin'")
         if not cursor.fetchone():
@@ -70,6 +83,50 @@ def init_auth_db():
 
 
 init_auth_db()
+
+
+def add_document(filename: str, file_type: str, file_size: int, chunk_count: int, uploaded_by: str) -> dict:
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO documents (filename, file_type, file_size, chunk_count, uploaded_by)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (filename, file_type, file_size, chunk_count, uploaded_by)
+        )
+        doc_id = cursor.lastrowid
+        conn.commit()
+    return get_document_by_id(doc_id)
+
+
+def get_all_documents() -> list[dict]:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM documents ORDER BY id DESC")
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_document_by_id(doc_id: int) -> Optional[dict]:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM documents WHERE id = ?", (doc_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def delete_document_from_db(doc_id: int) -> Optional[dict]:
+    doc = get_document_by_id(doc_id)
+    if not doc:
+        return None
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+        conn.commit()
+    return doc
 
 
 def get_user_from_db(username: str) -> Optional[dict]:
