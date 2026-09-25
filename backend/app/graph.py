@@ -1,6 +1,6 @@
 from typing import Annotated, AsyncIterator, TypedDict, Optional
 from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage, BaseMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_chroma import Chroma
 from langgraph.checkpoint.memory import MemorySaver
@@ -58,13 +58,24 @@ def _build_llm():
     )
 
 
-def get_vectorstore():
-    embedding_model = OllamaEmbeddings(
+def get_embedding_model():
+    if settings.use_gemini:
+        return GoogleGenerativeAIEmbeddings(
+            model="models/text-embedding-004",
+            google_api_key=settings.gemini_api_key,
+        )
+    return OllamaEmbeddings(
         model="mxbai-embed-large:latest",
         base_url=settings.ollama_base_url,
     )
+
+
+def get_vectorstore():
+    embedding_model = get_embedding_model()
     CHROMA_DIR = "./chroma_db"
-    COLLECTION = "antigravity_knowledge"
+    # Separate collections by provider to prevent vector dimension mismatch (768 vs 1024)
+    provider = "gemini" if settings.use_gemini else "ollama"
+    COLLECTION = f"antigravity_knowledge_{provider}"
     
     return Chroma(
         persist_directory=CHROMA_DIR,
